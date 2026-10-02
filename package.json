@@ -1,0 +1,17 @@
+{
+  "name": "gtm-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "shadcn build --output public/r",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "shadcn": "^4.21.1",
+    "stripe": "^23.0.0",
+    "typescript": "^5.9.0"
+  }
+}

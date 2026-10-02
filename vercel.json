@@ -1,0 +1,6 @@
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": "public",
+  "redirects": [{ "source": "/", "destination": "https://pumpgtm.com", "permanent": false }],
+  "headers": [{ "source": "/r/(.*)", "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }] }]
+}
