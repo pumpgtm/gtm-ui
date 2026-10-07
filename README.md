@@ -16,19 +16,31 @@ Works with both the Radix and the Base UI flavours of shadcn/ui.
 
 ## cancel-flow
 
-An in-app cancel dialog: a reason, at most one save offer, then a real
-cancellation.
+An in-app cancel dialog: a reason, one next step, then a real cancellation.
 
-- **Cancelling cancels here.** The subscription is set to end at the end of
-  its trial or paid period through the Stripe API. Customers are never sent to
-  the billing portal, where we saw cancellations fail to land.
+- **Cancelling cancels here.** The subscription ends at the end of its trial or
+  paid period through the Stripe API. Customers are never sent to the billing
+  portal, where we saw cancellations fail to land.
+- **Charged in the last 24 hours? Refund it.** Instead of a save offer, the
+  customer sees the charge and one button that refunds it in full and ends the
+  subscription now. The server rechecks the charge with Stripe, and a double
+  submit is still one refund.
 - **The offer follows the reason.** A trial is offered more days, never money.
   A paying customer who is pausing is offered a pause, one who finds it too
   expensive gets a discount, and anyone else gets a free month.
-- **One offer per subscription, ever**, and a trial can never run past 14 days
-  in total.
-- **"No thanks, cancel" is always on screen.**
-- **Nothing to migrate.** The reason goes into Stripe's own
+- **A failed payment is forgiven, not discounted.** A past-due customer's offer
+  voids the failed invoice, so this month is free; a coupon would only discount
+  next month and leave this one owed. Cancelling past due ends the
+  subscription now and voids what it owes, so the card stops being retried.
+- **One follow-up question** after "too expensive" (what would you pay),
+  "switching" (to what) and "missing a feature" (which one).
+- **One offer per customer, ever**, and a trial can never run past 14 days in
+  total. A free month that was accepted and never used carries over to a
+  restarted subscription (`unusedFreeMonthCoupon`).
+- **"No thanks, cancel" is always on screen**, and "Keep my subscription"
+  (`resumeSubscription`) undoes a scheduled cancellation, including one made in
+  the Stripe portal.
+- **Nothing to migrate.** The reason and follow-up answer go into Stripe's own
   `cancellation_details`, and the offer shown, and what the customer did with
   it, into the subscription's metadata.
 
@@ -50,7 +62,7 @@ export async function cancelAction(request: CancelRequest) {
 // app/billing/page.tsx
 import { CancelFlow } from "@/components/cancel-flow";
 import { subscriptionState, canCancel } from "@/lib/subscription-state";
-import { offerUsed } from "@/lib/cancel-subscription";
+import { offerUsed, refundableCharge } from "@/lib/cancel-subscription";
 
 const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 const state = subscriptionState(subscription);
@@ -58,7 +70,8 @@ const state = subscriptionState(subscription);
 {canCancel(state) && (
   <CancelFlow
     state={state}
-    offerUsed={offerUsed(subscription)}
+    offerUsed={await offerUsed(stripe, subscription.customer as string)}
+    refund={await refundableCharge(stripe, subscriptionId)}
     action={cancelAction}
     bookingUrl="https://cal.com/you" // optional: a call with a person, offered first
   />
@@ -66,7 +79,8 @@ const state = subscriptionState(subscription);
 ```
 
 Change the offers by passing a `policy` (trial extension days, total trial
-cap, discount, pause length) to both `CancelFlow` and `cancelSubscription`.
+cap, discount, pause length, refund window) to `CancelFlow`,
+`cancelSubscription` and `refundableCharge`.
 
 ## subscription-state
 
@@ -79,7 +93,7 @@ no gate compares `status` strings on its own:
 - A cancelled trial keeps access until it ends.
 - No subscription, an unfinished checkout, or a trial that ended without a
   card all mean `needs_card`, not "unavailable".
-- `past_due` can always cancel.
+- `past_due` (and Stripe's `unpaid`) has no access but can always cancel.
 
 ## Developing
 

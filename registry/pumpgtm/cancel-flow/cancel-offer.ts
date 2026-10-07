@@ -5,9 +5,11 @@ import type { SubscriptionState } from "@/lib/subscription-state";
 // offer from the same facts. The server always re-picks; the browser never
 // tells it which offer was shown.
 //
-// One offer per subscription, ever. A trial is offered time, never money: a
-// discount on a product someone has not used yet saves nobody. A paying
-// customer is offered what their reason asks for.
+// One offer per customer, ever: a restarted subscription does not earn another.
+// A trial is offered time, never money: a discount on a product someone has not
+// used yet saves nobody. A paying customer is offered what their reason asks
+// for. A customer whose renewal already failed gets that month forgiven: a
+// coupon only discounts next month and would leave this one owed.
 
 export const TRIAL_REASONS = {
   setup: "Couldn't get it set up",
@@ -31,10 +33,20 @@ export const PAID_REASONS = {
 
 export type CancelReason = keyof typeof TRIAL_REASONS | keyof typeof PAID_REASONS;
 
+// The one follow-up question, asked only after these reasons. The answer is
+// stored with the cancellation so you learn the price, the competitor or the
+// missing feature, not just the category.
+export const FOLLOW_UP_QUESTIONS: Partial<Record<CancelReason, string>> = {
+  too_expensive: "What would you pay per month?",
+  switched: "Which tool are you switching to?",
+  missing_feature: "Which feature do you need?",
+};
+
 export type SaveOffer =
   | { kind: "extend_trial"; days: number }
   | { kind: "discount"; percentOff: number; months: number }
-  | { kind: "pause"; months: number };
+  | { kind: "pause"; months: number }
+  | { kind: "waive_invoice" };
 
 export interface OfferPolicy {
   trialExtensionDays: number;
@@ -42,6 +54,8 @@ export interface OfferPolicy {
   maxTrialDays: number;
   discount: { percentOff: number; months: number };
   pauseMonths: number;
+  // Cancelling within this many hours of a charge offers it back in full.
+  refundWindowHours: number;
 }
 
 export const DEFAULT_OFFER_POLICY: OfferPolicy = {
@@ -49,6 +63,7 @@ export const DEFAULT_OFFER_POLICY: OfferPolicy = {
   maxTrialDays: 14,
   discount: { percentOff: 50, months: 2 },
   pauseMonths: 1,
+  refundWindowHours: 24,
 };
 
 export function isCancelReason(state: SubscriptionState, value: unknown): value is CancelReason {
@@ -59,7 +74,7 @@ export function isCancelReason(state: SubscriptionState, value: unknown): value 
 export function pickOffer(input: {
   state: SubscriptionState;
   reason: CancelReason;
-  // True once this subscription has accepted any save offer.
+  // True once this customer has accepted any save offer, on any subscription.
   offerUsed: boolean;
   policy?: OfferPolicy;
 }): SaveOffer | null {
@@ -68,6 +83,7 @@ export function pickOffer(input: {
   if (input.state === "trialing") {
     return { kind: "extend_trial", days: policy.trialExtensionDays };
   }
+  if (input.state === "past_due") return { kind: "waive_invoice" };
   if (input.state !== "active") return null;
   if (input.reason === "pausing") return { kind: "pause", months: policy.pauseMonths };
   if (input.reason === "too_expensive") return { kind: "discount", ...policy.discount };
@@ -90,8 +106,16 @@ export function extendedTrialEnd(
   return Math.max(base, Math.min(wanted, cap));
 }
 
+// Whether a charge paid at `paidAt` may still be refunded in the cancel flow.
+export function isWithinRefundWindow(paidAt: Date, now: Date, windowHours: number): boolean {
+  const age = now.getTime() - paidAt.getTime();
+  return age >= 0 && age <= windowHours * 3_600_000;
+}
+
 export function describeOffer(offer: SaveOffer): string {
   switch (offer.kind) {
+    case "waive_invoice":
+      return "Take this month free";
     case "extend_trial":
       return `Add ${offer.days} days to my trial`;
     case "pause":

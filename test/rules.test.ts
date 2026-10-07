@@ -6,7 +6,7 @@ import {
   subscriptionState,
   type SubscriptionSnapshot,
 } from "../registry/pumpgtm/subscription-state/subscription-state.ts";
-import { extendedTrialEnd, pickOffer } from "../registry/pumpgtm/cancel-flow/cancel-offer.ts";
+import { extendedTrialEnd, isWithinRefundWindow, pickOffer } from "../registry/pumpgtm/cancel-flow/cancel-offer.ts";
 
 const DAY = 86_400;
 const now = new Date("2026-10-01T00:00:00Z");
@@ -54,7 +54,7 @@ test("past due has no access but can always cancel", () => {
 });
 
 test("ended statuses", () => {
-  for (const status of ["canceled", "unpaid", "incomplete_expired"]) {
+  for (const status of ["canceled", "incomplete_expired"]) {
     assert.equal(subscriptionState(sub({ status }), now), "ended");
   }
 });
@@ -79,9 +79,8 @@ test("a paying customer gets what the reason asks for", () => {
   });
 });
 
-test("one offer per subscription, and none for past due or paused", () => {
+test("one offer per customer, and none while paused", () => {
   assert.equal(pickOffer({ state: "active", reason: "no_results", offerUsed: true }), null);
-  assert.equal(pickOffer({ state: "past_due", reason: "no_results", offerUsed: false }), null);
   assert.equal(pickOffer({ state: "paused", reason: "pausing", offerUsed: false }), null);
 });
 
@@ -93,4 +92,25 @@ test("a trial extension adds to what is left but never passes the total cap", ()
   assert.equal(extendedTrialEnd({ trial_start: start, trial_end: start + 12 * DAY }, 7, 14, now), start + 14 * DAY);
   // Already at the cap: nothing changes, and it never moves backwards.
   assert.equal(extendedTrialEnd({ trial_start: start - 20 * DAY, trial_end: t + DAY }, 7, 14, now), t + DAY);
+});
+
+test("unpaid still owes money: no access, but it can always cancel", () => {
+  const state = subscriptionState(sub({ status: "unpaid" }), now);
+  assert.equal(state, "past_due");
+  assert.equal(hasAccess(state), false);
+  assert.equal(canCancel(state), true);
+});
+
+test("a failed renewal is offered this month forgiven, once", () => {
+  assert.deepEqual(pickOffer({ state: "past_due", reason: "too_expensive", offerUsed: false }), {
+    kind: "waive_invoice",
+  });
+  assert.equal(pickOffer({ state: "past_due", reason: "too_expensive", offerUsed: true }), null);
+});
+
+test("the refund window is inclusive at its edge and never in the future", () => {
+  const paid = new Date(now.getTime() - 24 * 3_600_000);
+  assert.equal(isWithinRefundWindow(paid, now, 24), true);
+  assert.equal(isWithinRefundWindow(new Date(paid.getTime() - 1), now, 24), false);
+  assert.equal(isWithinRefundWindow(new Date(now.getTime() + 60_000), now, 24), false);
 });

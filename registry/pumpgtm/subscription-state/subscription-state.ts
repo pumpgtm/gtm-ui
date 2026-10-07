@@ -38,14 +38,17 @@ export function subscriptionState(
     case "active":
       if (subscription.pause_collection) return "paused";
       return scheduledToCancel ? "canceling" : "active";
+    // `unpaid` is a past-due subscription Stripe stopped retrying. It still owes
+    // money and still has to be cancellable.
     case "past_due":
+    case "unpaid":
       return "past_due";
     // `paused` is Stripe's status for a trial that ended with no payment method.
     case "incomplete":
     case "paused":
       return "needs_card";
     default:
-      // canceled, unpaid, incomplete_expired
+      // canceled, incomplete_expired
       return "ended";
   }
 }
